@@ -63,10 +63,6 @@ const int systemDelay = 0;
 int systemInitCount = 0;
 bool systemInited = false;
 int N_SCANS = 0;
-float cloudCurvature[400000];
-int cloudSortInd[400000];
-int cloudNeighborPicked[400000];
-int cloudLabel[400000];
 
 enum class LidarModel {
   VLP16,
@@ -103,8 +99,6 @@ std::size_t getClosestIndex(BidirectionalIterator first,
   return std::distance(first, getClosest(first, last, value));
 }
 
-
-bool comp(int i, int j) { return (cloudCurvature[i] < cloudCurvature[j]); }
 
 ros::Publisher pubLaserCloud;
 ros::Publisher pubCornerPointsSharp;
@@ -157,7 +151,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
   std::vector<int> scanStartInd(N_SCANS, 0);
   std::vector<int> scanEndInd(N_SCANS, 0);
 
-  pcl::PointCloud<pcl::PointXYZ> laserCloudIn;
+  pcl::PointCloud < pcl::PointXYZ > laserCloudIn;
   pcl::fromROSMsg(*laserCloudMsg, laserCloudIn);
   std::vector<int> indices;
 
@@ -268,27 +262,64 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
     *laserCloud += laserCloudScans[i];
     scanEndInd[i] = laserCloud->size() - 6;
   }
+  std::vector<float> cloudCurvature(laserCloud->size());
+  std::vector<int> cloudSortInd(laserCloud->size());
+  std::vector<int> cloud_discarded(laserCloud->size());
+  std::vector<int> cloud_discarded_so_close(laserCloud->size());
+  std::vector<int> cloudLabel(laserCloud->size());
+
+  auto comp = [&cloudCurvature](int i, int j) {
+    return (cloudCurvature[i] < cloudCurvature[j]);
+  };
 
   printf("prepare time %f \n", t_prepare.toc());
+
+  pcl::PointCloud < PointType > cloud_removed_points;
 
   for (int i = 5; i < cloudSize - 5; i++) {
     float diffX = laserCloud->points[i - 5].x + laserCloud->points[i - 4].x + laserCloud->points[i - 3].x + laserCloud->points[i - 2].x + laserCloud->points[i - 1].x - 10 * laserCloud->points[i].x + laserCloud->points[i + 1].x + laserCloud->points[i + 2].x + laserCloud->points[i + 3].x + laserCloud->points[i + 4].x + laserCloud->points[i + 5].x;
     float diffY = laserCloud->points[i - 5].y + laserCloud->points[i - 4].y + laserCloud->points[i - 3].y + laserCloud->points[i - 2].y + laserCloud->points[i - 1].y - 10 * laserCloud->points[i].y + laserCloud->points[i + 1].y + laserCloud->points[i + 2].y + laserCloud->points[i + 3].y + laserCloud->points[i + 4].y + laserCloud->points[i + 5].y;
     float diffZ = laserCloud->points[i - 5].z + laserCloud->points[i - 4].z + laserCloud->points[i - 3].z + laserCloud->points[i - 2].z + laserCloud->points[i - 1].z - 10 * laserCloud->points[i].z + laserCloud->points[i + 1].z + laserCloud->points[i + 2].z + laserCloud->points[i + 3].z + laserCloud->points[i + 4].z + laserCloud->points[i + 5].z;
 
+
     cloudCurvature[i] = diffX * diffX + diffY * diffY + diffZ * diffZ;
     cloudSortInd[i] = i;
-    cloudNeighborPicked[i] = 0;
+    cloud_discarded[i] = 0;
+    cloud_discarded_so_close[i] = 0;
     cloudLabel[i] = 0;
+
+    auto rad2deg = [](double rad) {
+      return rad * 180.0 / M_PI;
+    };
+    auto point_is_in_bad_box = [](const pcl::PointXYZI &p) {
+      return p.x > -10 && p.x < 0.5 && p.y > -25 && p.y < 25;
+    };
+    auto distance = [](const pcl::PointXYZI &p) {
+      return std::sqrt(std::pow(p.x, 2) + std::pow(p.y, 2));
+    };
+
+    const auto &pointo = laserCloud->points[i];
+    float azim = rad2deg(atan2(pointo.y, pointo.x));
+    if (azim < 0)
+      azim += 360;
+    if (azim < 30 || azim > 355
+        || point_is_in_bad_box(pointo)
+        || distance(pointo) > 300) {
+      for (size_t j = i - 5; j < i + 5; ++j) {
+        cloud_discarded[j] = 1;
+        cloud_removed_points.points.push_back(pointo);
+      }
+    }
+
   }
 
 
   TicToc t_pts;
 
-  pcl::PointCloud<PointType> cornerPointsSharp;
-  pcl::PointCloud<PointType> cornerPointsLessSharp;
-  pcl::PointCloud<PointType> surfPointsFlat;
-  pcl::PointCloud<PointType> surfPointsLessFlat;
+  pcl::PointCloud < PointType > cornerPointsSharp;
+  pcl::PointCloud < PointType > cornerPointsLessSharp;
+  pcl::PointCloud < PointType > surfPointsFlat;
+  pcl::PointCloud < PointType > surfPointsLessFlat;
 
   float t_q_sort = 0;
   for (int i = 0; i < N_SCANS; i++) {
@@ -300,14 +331,14 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
       int ep = scanStartInd[i] + (scanEndInd[i] - scanStartInd[i]) * (j + 1) / 6 - 1;
 
       TicToc t_tmp;
-      std::sort(cloudSortInd + sp, cloudSortInd + ep + 1, comp);
+      std::sort(cloudSortInd.begin() + sp, cloudSortInd.begin() + ep + 1, comp);
       t_q_sort += t_tmp.toc();
 
       int largestPickedNum = 0;
       for (int k = ep; k >= sp; k--) {
         int ind = cloudSortInd[k];
 
-        if (cloudNeighborPicked[ind] == 0 &&
+        if (cloud_discarded[ind] == 0 &&
             cloudCurvature[ind] > 0.1) {
 
           largestPickedNum++;
@@ -322,7 +353,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
             break;
           }
 
-          cloudNeighborPicked[ind] = 1;
+          cloud_discarded[ind] = 1;
+//          cloud_removed_points.points.push_back(laserCloud->points[ind]);
 
           for (int l = 1; l <= 5; l++) {
             float diffX = laserCloud->points[ind + l].x - laserCloud->points[ind + l - 1].x;
@@ -332,7 +364,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
               break;
             }
 
-            cloudNeighborPicked[ind + l] = 1;
+            cloud_discarded[ind + l] = 1;
+//            cloud_removed_points.points.push_back(laserCloud->points[ind + l]);
           }
           for (int l = -1; l >= -5; l--) {
             float diffX = laserCloud->points[ind + l].x - laserCloud->points[ind + l + 1].x;
@@ -342,7 +375,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
               break;
             }
 
-            cloudNeighborPicked[ind + l] = 1;
+            cloud_discarded[ind + l] = 1;
+//            cloud_removed_points.points.push_back(laserCloud->points[ind + l]);
           }
         }
       }
@@ -351,7 +385,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
       for (int k = sp; k <= ep; k++) {
         int ind = cloudSortInd[k];
 
-        if (cloudNeighborPicked[ind] == 0 &&
+        if (cloud_discarded[ind] == 0 &&
             cloudCurvature[ind] < 0.1) {
 
           cloudLabel[ind] = -1;
@@ -362,7 +396,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
             break;
           }
 
-          cloudNeighborPicked[ind] = 1;
+          cloud_discarded[ind] = 1;
+//          cloud_removed_points.points.push_back(laserCloud->points[ind]);
           for (int l = 1; l <= 5; l++) {
             float diffX = laserCloud->points[ind + l].x - laserCloud->points[ind + l - 1].x;
             float diffY = laserCloud->points[ind + l].y - laserCloud->points[ind + l - 1].y;
@@ -371,7 +406,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
               break;
             }
 
-            cloudNeighborPicked[ind + l] = 1;
+            cloud_discarded[ind + l] = 1;
+//            cloud_removed_points.points.push_back(laserCloud->points[ind + l]);
           }
           for (int l = -1; l >= -5; l--) {
             float diffX = laserCloud->points[ind + l].x - laserCloud->points[ind + l + 1].x;
@@ -381,7 +417,8 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
               break;
             }
 
-            cloudNeighborPicked[ind + l] = 1;
+            cloud_discarded[ind + l] = 1;
+//            cloud_removed_points.points.push_back(laserCloud->points[ind + l]);
           }
         }
       }
@@ -393,7 +430,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
       }
     }
 
-    pcl::PointCloud<PointType> surfPointsLessFlatScanDS;
+    pcl::PointCloud < PointType > surfPointsLessFlatScanDS;
     pcl::VoxelGrid<PointType> downSizeFilter;
     downSizeFilter.setInputCloud(surfPointsLessFlatScan);
     downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
@@ -434,6 +471,12 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
   surfPointsLessFlat2.header.stamp = laserCloudMsg->header.stamp;
   surfPointsLessFlat2.header.frame_id = "/camera_init";
   pubSurfPointsLessFlat.publish(surfPointsLessFlat2);
+
+  sensor_msgs::PointCloud2 msg_cloud_removed_points;
+  pcl::toROSMsg(cloud_removed_points, msg_cloud_removed_points);
+  msg_cloud_removed_points.header.stamp = laserCloudMsg->header.stamp;
+  msg_cloud_removed_points.header.frame_id = "/camera_init";
+  pubRemovePoints.publish(msg_cloud_removed_points);
 
   // pub each scam
   if (PUB_EACH_LINE) {
