@@ -90,8 +90,8 @@ int laserCloudCornerLastNum = 0;
 int laserCloudSurfLastNum = 0;
 
 // Transformation from current frame to world frame
-Eigen::Quaterniond q_w_curr(1, 0, 0, 0);
-Eigen::Vector3d t_w_curr(0, 0, 0);
+Eigen::Quaterniond quat_estimated(1, 0, 0, 0);
+Eigen::Vector3d trans_estimated(0, 0, 0);
 
 // q_curr_last(x, y, z, w), t_curr_last
 double para_q[4] = {0, 0, 0, 1};
@@ -469,8 +469,8 @@ int main(int argc, char **argv) {
         }
         printf("optimization twice time %f \n", t_opt.toc());
 
-        t_w_curr = t_w_curr + q_w_curr * t_last_curr;
-        q_w_curr = q_w_curr * q_last_curr;
+        trans_estimated = trans_estimated + quat_estimated * t_last_curr;
+        quat_estimated = quat_estimated * q_last_curr;
       }
 
       TicToc t_pub;
@@ -480,13 +480,13 @@ int main(int argc, char **argv) {
       laserOdometry.header.frame_id = "/camera_init";
       laserOdometry.child_frame_id = "/laser_odom";
       laserOdometry.header.stamp = ros::Time().fromSec(timeSurfPointsLessFlat);
-      laserOdometry.pose.pose.orientation.x = q_w_curr.x();
-      laserOdometry.pose.pose.orientation.y = q_w_curr.y();
-      laserOdometry.pose.pose.orientation.z = q_w_curr.z();
-      laserOdometry.pose.pose.orientation.w = q_w_curr.w();
-      laserOdometry.pose.pose.position.x = t_w_curr.x();
-      laserOdometry.pose.pose.position.y = t_w_curr.y();
-      laserOdometry.pose.pose.position.z = t_w_curr.z();
+      laserOdometry.pose.pose.orientation.x = quat_estimated.x();
+      laserOdometry.pose.pose.orientation.y = quat_estimated.y();
+      laserOdometry.pose.pose.orientation.z = quat_estimated.z();
+      laserOdometry.pose.pose.orientation.w = quat_estimated.w();
+      laserOdometry.pose.pose.position.x = trans_estimated.x();
+      laserOdometry.pose.pose.position.y = trans_estimated.y();
+      laserOdometry.pose.pose.position.z = trans_estimated.z();
       pubLaserOdometry.publish(laserOdometry);
 
       geometry_msgs::PoseStamped laserPose;

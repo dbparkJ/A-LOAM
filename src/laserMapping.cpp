@@ -109,16 +109,16 @@ pcl::KdTreeFLANN<PointType>::Ptr kdtreeCornerFromMap(new pcl::KdTreeFLANN<PointT
 pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurfFromMap(new pcl::KdTreeFLANN<PointType>());
 
 double parameters[7] = {0, 0, 0, 1, 0, 0, 0};
-Eigen::Map<Eigen::Quaterniond> q_w_curr(parameters);
-Eigen::Map<Eigen::Vector3d> t_w_curr(parameters + 4);
+Eigen::Map<Eigen::Quaterniond> quat_estimated(parameters);
+Eigen::Map<Eigen::Vector3d> trans_estimated(parameters + 4);
 
 // wmap_T_odom * odom_T_curr = wmap_T_curr;
 // transformation between odom's world and map's world frame
-Eigen::Quaterniond q_wmap_wodom(1, 0, 0, 0);
-Eigen::Vector3d t_wmap_wodom(0, 0, 0);
+Eigen::Quaterniond quat_odom_world_to_map_world(1, 0, 0, 0);
+Eigen::Vector3d trans_odom_world_to_map_world(0, 0, 0);
 
-Eigen::Quaterniond q_wodom_curr(1, 0, 0, 0);
-Eigen::Vector3d t_wodom_curr(0, 0, 0);
+Eigen::Quaterniond quat_odom_global(1, 0, 0, 0);
+Eigen::Vector3d trans_odom_global(0, 0, 0);
 
 
 std::queue<sensor_msgs::PointCloud2ConstPtr> cornerLastBuf;
@@ -141,18 +141,18 @@ nav_msgs::Path laserAfterMappedPath;
 
 // set initial guess
 void transformAssociateToMap() {
-  q_w_curr = q_wmap_wodom * q_wodom_curr;
-  t_w_curr = q_wmap_wodom * t_wodom_curr + t_wmap_wodom;
+  quat_estimated = quat_odom_world_to_map_world * quat_odom_global;
+  trans_estimated = quat_odom_world_to_map_world * trans_odom_global + trans_odom_world_to_map_world;
 }
 
 void transformUpdate() {
-  q_wmap_wodom = q_w_curr * q_wodom_curr.inverse();
-  t_wmap_wodom = t_w_curr - q_wmap_wodom * t_wodom_curr;
+  quat_odom_world_to_map_world = quat_estimated * quat_odom_global.inverse();
+  trans_odom_world_to_map_world = trans_estimated - quat_odom_world_to_map_world * trans_odom_global;
 }
 
 void pointAssociateToMap(PointType const *const pi, PointType *const po) {
   Eigen::Vector3d point_curr(pi->x, pi->y, pi->z);
-  Eigen::Vector3d point_w = q_w_curr * point_curr + t_w_curr;
+  Eigen::Vector3d point_w = quat_estimated * point_curr + trans_estimated;
   po->x = point_w.x();
   po->y = point_w.y();
   po->z = point_w.z();
@@ -162,7 +162,7 @@ void pointAssociateToMap(PointType const *const pi, PointType *const po) {
 
 void pointAssociateTobeMapped(PointType const *const pi, PointType *const po) {
   Eigen::Vector3d point_w(pi->x, pi->y, pi->z);
-  Eigen::Vector3d point_curr = q_w_curr.inverse() * (point_w - t_w_curr);
+  Eigen::Vector3d point_curr = quat_estimated.inverse() * (point_w - trans_estimated);
   po->x = point_curr.x();
   po->y = point_curr.y();
   po->z = point_curr.z();
@@ -204,8 +204,8 @@ void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr &laserOdometry) {
   t_wodom_curr.y() = laserOdometry->pose.pose.position.y;
   t_wodom_curr.z() = laserOdometry->pose.pose.position.z;
 
-  Eigen::Quaterniond q_w_curr = q_wmap_wodom * q_wodom_curr;
-  Eigen::Vector3d t_w_curr = q_wmap_wodom * t_wodom_curr + t_wmap_wodom;
+  Eigen::Quaterniond q_w_curr = quat_odom_world_to_map_world * q_wodom_curr;
+  Eigen::Vector3d t_w_curr = quat_odom_world_to_map_world * t_wodom_curr + trans_odom_world_to_map_world;
 
   nav_msgs::Odometry odomAftMapped;
   odomAftMapped.header.frame_id = "/camera_init";
@@ -221,8 +221,8 @@ void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr &laserOdometry) {
   pubOdomAftMappedHighFrec.publish(odomAftMapped);
 }
 
-void process() {
-  while (1) {
+[[noreturn]] void process() {
+  while (true) {
     while (!cornerLastBuf.empty() && !surfLastBuf.empty() &&
            !fullResBuf.empty() && !odometryBuf.empty()) {
       mBuf.lock();
@@ -273,13 +273,13 @@ void process() {
       pcl::fromROSMsg(*fullResBuf.front(), *laserCloudFullRes);
       fullResBuf.pop();
 
-      q_wodom_curr.x() = odometryBuf.front()->pose.pose.orientation.x;
-      q_wodom_curr.y() = odometryBuf.front()->pose.pose.orientation.y;
-      q_wodom_curr.z() = odometryBuf.front()->pose.pose.orientation.z;
-      q_wodom_curr.w() = odometryBuf.front()->pose.pose.orientation.w;
-      t_wodom_curr.x() = odometryBuf.front()->pose.pose.position.x;
-      t_wodom_curr.y() = odometryBuf.front()->pose.pose.position.y;
-      t_wodom_curr.z() = odometryBuf.front()->pose.pose.position.z;
+      quat_odom_global.x() = odometryBuf.front()->pose.pose.orientation.x;
+      quat_odom_global.y() = odometryBuf.front()->pose.pose.orientation.y;
+      quat_odom_global.z() = odometryBuf.front()->pose.pose.orientation.z;
+      quat_odom_global.w() = odometryBuf.front()->pose.pose.orientation.w;
+      trans_odom_global.x() = odometryBuf.front()->pose.pose.position.x;
+      trans_odom_global.y() = odometryBuf.front()->pose.pose.position.y;
+      trans_odom_global.z() = odometryBuf.front()->pose.pose.position.z;
       odometryBuf.pop();
 
       while (!cornerLastBuf.empty()) {
@@ -294,15 +294,15 @@ void process() {
       transformAssociateToMap();
 
       TicToc t_shift;
-      int centerCubeI = int((t_w_curr.x() + 25.0) / 50.0) + laserCloudCenWidth;
-      int centerCubeJ = int((t_w_curr.y() + 25.0) / 50.0) + laserCloudCenHeight;
-      int centerCubeK = int((t_w_curr.z() + 25.0) / 50.0) + laserCloudCenDepth;
+      int centerCubeI = int((trans_estimated.x() + 25.0) / 50.0) + laserCloudCenWidth;
+      int centerCubeJ = int((trans_estimated.y() + 25.0) / 50.0) + laserCloudCenHeight;
+      int centerCubeK = int((trans_estimated.z() + 25.0) / 50.0) + laserCloudCenDepth;
 
-      if (t_w_curr.x() + 25.0 < 0)
+      if (trans_estimated.x() + 25.0 < 0)
         centerCubeI--;
-      if (t_w_curr.y() + 25.0 < 0)
+      if (trans_estimated.y() + 25.0 < 0)
         centerCubeJ--;
-      if (t_w_curr.z() + 25.0 < 0)
+      if (trans_estimated.z() + 25.0 < 0)
         centerCubeK--;
 
       while (centerCubeI < 3) {
@@ -766,7 +766,7 @@ void process() {
         laserCloudMsg.header.frame_id = "/camera_init";
         pubLaserCloudMap.publish(laserCloudMsg);
 
-        pcl::io::savePCDFileASCII("/home/mfc/pcds/map_pinarbasi_" + std::to_string(frameCount) + ".pcd", laserCloudMap);
+//        pcl::io::savePCDFileASCII("/home/mfc/pcds/map_pinarbasi_" + std::to_string(frameCount) + ".pcd", laserCloudMap);
       }
 
       int laserCloudFullResNum = laserCloudFullRes->points.size();
@@ -788,13 +788,13 @@ void process() {
       odomAftMapped.header.frame_id = "/camera_init";
       odomAftMapped.child_frame_id = "/aft_mapped";
       odomAftMapped.header.stamp = ros::Time().fromSec(timeLaserOdometry);
-      odomAftMapped.pose.pose.orientation.x = q_w_curr.x();
-      odomAftMapped.pose.pose.orientation.y = q_w_curr.y();
-      odomAftMapped.pose.pose.orientation.z = q_w_curr.z();
-      odomAftMapped.pose.pose.orientation.w = q_w_curr.w();
-      odomAftMapped.pose.pose.position.x = t_w_curr.x();
-      odomAftMapped.pose.pose.position.y = t_w_curr.y();
-      odomAftMapped.pose.pose.position.z = t_w_curr.z();
+      odomAftMapped.pose.pose.orientation.x = quat_estimated.x();
+      odomAftMapped.pose.pose.orientation.y = quat_estimated.y();
+      odomAftMapped.pose.pose.orientation.z = quat_estimated.z();
+      odomAftMapped.pose.pose.orientation.w = quat_estimated.w();
+      odomAftMapped.pose.pose.position.x = trans_estimated.x();
+      odomAftMapped.pose.pose.position.y = trans_estimated.y();
+      odomAftMapped.pose.pose.position.z = trans_estimated.z();
       pubOdomAftMapped.publish(odomAftMapped);
 
       geometry_msgs::PoseStamped laserAfterMappedPose;
@@ -808,13 +808,13 @@ void process() {
       static tf::TransformBroadcaster br;
       tf::Transform transform;
       tf::Quaternion q;
-      transform.setOrigin(tf::Vector3(t_w_curr(0),
-                                      t_w_curr(1),
-                                      t_w_curr(2)));
-      q.setW(q_w_curr.w());
-      q.setX(q_w_curr.x());
-      q.setY(q_w_curr.y());
-      q.setZ(q_w_curr.z());
+      transform.setOrigin(tf::Vector3(trans_estimated(0),
+                                      trans_estimated(1),
+                                      trans_estimated(2)));
+      q.setW(quat_estimated.w());
+      q.setX(quat_estimated.x());
+      q.setY(quat_estimated.y());
+      q.setZ(quat_estimated.z());
       transform.setRotation(q);
       br.sendTransform(tf::StampedTransform(transform, odomAftMapped.header.stamp, "/camera_init", "/aft_mapped"));
 
