@@ -640,7 +640,7 @@ Visualization Manager:
       Name: scan
     - Class: rviz/Image
       Enabled: true
-      Image Topic: /kitti/image
+      Image Topic: /roof_clpe_ros/roof_cam_1/image_raw
       Max Value: 1
       Median window: 5
       Min Value: 0
